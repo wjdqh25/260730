@@ -6,14 +6,13 @@ import requests
 # -----------------------------------------------------------------------------
 # 1. 페이지 기본 설정
 # -----------------------------------------------------------------------------
-st.set_page_config(page_title="전국 고령화 지도", layout="wide")
-st.title("🗺️ 전국 시군구 고령화 및 지표 분석 지도")
-st.markdown("연도 및 시도를 선택하여 지역별 고령화율을 확인하고, 광주·전남 지역의 주요 지표 추이를 분석해 보세요.")
+st.set_page_config(page_title="광주·전남 고령화 및 청소년 지표 지도", layout="wide")
+st.title("🗺️ 광주·전남 고령화 지도 및 청소년 인구 추이")
+st.markdown("선택한 지역의 고령화율(%)을 지도로 확인하고, 광주/전남의 청소년 인구 변화를 분석합니다.")
 
 # -----------------------------------------------------------------------------
 # 2. 데이터 불러오기 및 사전 가공 (캐싱 적용)
 # -----------------------------------------------------------------------------
-# 모든 연도의 계산을 미리 해두면 화면을 조작할 때 속도가 훨씬 빠릅니다.
 @st.cache_data
 def load_and_preprocess_data():
     # 1. 인구 데이터 불러오기 ('코드' 열 문자 유지)
@@ -24,23 +23,19 @@ def load_and_preprocess_data():
     geo_url = "https://raw.githubusercontent.com/greatsong/modudata/main/data/boundaries/sigungu_kr.geojson"
     geojson_data = requests.get(geo_url).json()
     
-    # 3. 행정구역 개편에 따른 코드 및 이름 일괄 보정 (모든 연도 공통)
+    # 3. 행정구역 개편에 따른 코드 및 이름 일괄 보정
     df['시군구코드'] = df['코드'].str[:5]
-    # 강원특별자치도 (42 -> 51)
     df.loc[df['시군구코드'].str.startswith('42'), '시군구코드'] = '51' + df['시군구코드'].str[2:]
     df['시도'] = df['시도'].replace('강원도', '강원특별자치도')
-    # 전북특별자치도 (45 -> 52)
     df.loc[df['시군구코드'].str.startswith('45'), '시군구코드'] = '52' + df['시군구코드'].str[2:]
     df['시도'] = df['시도'].replace('전라북도', '전북특별자치도')
-    # 군위군 대구 편입 (47720 -> 27720)
     df.loc[df['시군구코드'] == '47720', '시군구코드'] = '27720'
     df.loc[df['시군구코드'] == '27720', '시도'] = '대구광역시'
 
-    # 4. 분석에 필요한 나이 열 분류하기
+    # 4. 분석에 필요한 나이 열 분류 (총인구, 65세 이상, 9~24세 청소년)
     total_cols = [col for col in df.columns if col.startswith('계_') and '세' in col]
-    old_cols = []   # 65세 이상
-    youth_cols = [] # 9~24세 (청소년 기본법 기준)
-    birth_cols = ['계_0세'] # 신생아 (출산율 지표 대용)
+    old_cols = []
+    youth_cols = []
     
     for col in total_cols:
         num_str = col.replace('계_', '').replace('세 이상', '').replace('세', '')
@@ -49,37 +44,31 @@ def load_and_preprocess_data():
             if age >= 65: old_cols.append(col)
             if 9 <= age <= 24: youth_cols.append(col)
 
-    # 읍면동 단위를 시군구 단위로 합산하기 위해 그룹화
-    # 숫자 열(인구수)들만 더해줍니다.
+    # 시군구 단위로 합산
     df_grouped = df.groupby(['연도', '시군구코드', '시도', '시군구'])[total_cols].sum().reset_index()
     
-    # 주요 지표 인구수 합산
+    # 인구수 합산
     df_grouped['총인구'] = df_grouped[total_cols].sum(axis=1)
     df_grouped['고령인구'] = df_grouped[old_cols].sum(axis=1)
     df_grouped['청소년인구'] = df_grouped[youth_cols].sum(axis=1)
-    df_grouped['신생아인구'] = df_grouped[birth_cols].sum(axis=1)
     
-    # 5. 비율(%) 계산
+    # 고령화율(%) 계산
     df_grouped['고령화율(%)'] = (df_grouped['고령인구'] / df_grouped['총인구'] * 100).round(1)
-    df_grouped['청소년률(%)'] = (df_grouped['청소년인구'] / df_grouped['총인구'] * 100).round(1)
-    df_grouped['신생아비율(%)'] = (df_grouped['신생아인구'] / df_grouped['총인구'] * 100).round(2)
     
     return df_grouped, geojson_data
 
-with st.spinner("데이터를 불러오고 계산하는 중입니다..."):
+with st.spinner("데이터를 준비하는 중입니다..."):
     df_all, geojson_kr = load_and_preprocess_data()
 
 # -----------------------------------------------------------------------------
 # 3. UI: 시도 선택(드롭다운) & 연도 선택(버튼)
 # -----------------------------------------------------------------------------
-st.markdown("### 🗺️ 맞춤형 고령화 지도 조회")
-
-col_sel1, col_sel2 = st.columns([1, 3])
+col_sel1, col_sel2 = st.columns([1, 2])
 
 with col_sel1:
-    # 데이터에 존재하는 시도 목록 추출 (가나다순 정렬)
-    sido_list = ['전국'] + sorted(df_all['시도'].unique().tolist())
-    selected_sido = st.selectbox("🔍 시도 선택 (지도 확대)", sido_list)
+    # 요청에 따라 광주광역시와 전라남도만 드롭다운에 포함
+    sido_list = ['광주/전남 전체', '광주광역시', '전라남도']
+    selected_sido = st.selectbox("🔍 지역 선택 (지도 확대)", sido_list)
 
 with col_sel2:
     years = sorted(df_all['연도'].unique())
@@ -91,27 +80,28 @@ with col_sel2:
     )
 
 # -----------------------------------------------------------------------------
-# 4. 지도용 데이터 필터링 및 결측치(회색) 처리
+# 4. 지도용 데이터 필터링
 # -----------------------------------------------------------------------------
 # 선택한 연도 데이터만 추출
 df_map = df_all[df_all['연도'] == selected_year].copy()
 
-# '전국'이 아니라면 특정 시도만 남기기 (이것만으로 Plotly가 알아서 지도를 확대해 줌)
-if selected_sido != '전국':
-    df_map = df_map[df_map['시도'] == selected_sido]
+# 드롭다운 선택에 따라 타겟 지역 설정
+if selected_sido == '광주/전남 전체':
+    target_sido = ['광주광역시', '전라남도']
+else:
+    target_sido = [selected_sido]
 
-# GeoJSON 파일에서 현재 선택된 범위('전국' 또는 특정 '시도')에 해당하는 코드 목록 찾기
+# 선택된 지역의 데이터만 남기기 (이 과정을 통해 지도에서 다른 지역은 아예 안 보이게 됨)
+df_map = df_map[df_map['시도'].isin(target_sido)]
+
+# GeoJSON에서 타겟 지역의 코드만 추려냄
 geo_info = {
     f['properties']['코드']: {'시도': f['properties']['시도'], '시군구': f['properties']['시군구']} 
     for f in geojson_kr['features']
 }
+expected_codes = [code for code, info in geo_info.items() if info['시도'] in target_sido]
 
-if selected_sido != '전국':
-    expected_codes = [code for code, info in geo_info.items() if info['시도'] == selected_sido]
-else:
-    expected_codes = list(geo_info.keys())
-
-# 지도 경계에는 있지만 데이터엔 없는 곳 찾기
+# 타겟 지역 중 데이터가 없는 곳(행정구역 변경 등으로 어긋난 곳) 처리
 missing_codes = set(expected_codes) - set(df_map['시군구코드'])
 
 if missing_codes:
@@ -125,7 +115,7 @@ if missing_codes:
         })
     df_map = pd.concat([df_map, pd.DataFrame(missing_data)], ignore_index=True)
 
-# 5단계 구간 나누기 (연도가 달라도 고정)
+# 5단계 구간 나누기 (연도가 달라도 기준은 고정)
 bins = [0, 19, 23, 28, 38, 100]
 labels = ['19% 미만', '19%~23%', '23%~28%', '28%~38%', '38% 이상']
 df_map['고령화율 구간'] = pd.cut(df_map['고령화율(%)'], bins=bins, labels=labels, right=False)
@@ -155,6 +145,7 @@ fig = px.choropleth(
     }
 )
 
+# 선택된 지역에 맞게 자동으로 줌(확대)되며 배경은 숨김
 fig.update_geos(fitbounds="locations", visible=False)
 fig.update_layout(
     margin={"r":0, "t":0, "l":0, "b":0},
@@ -162,16 +153,15 @@ fig.update_layout(
 )
 
 st.plotly_chart(fig, use_container_width=True)
-st.info("💡 **안내:** 연도에 따른 행정구역 개편 등으로 옛 데이터와 현재 지도 경계가 일부 맞지 않는 지역은 **회색(데이터 없음)**으로 표시됩니다.")
 
 # -----------------------------------------------------------------------------
-# 6. 표 나란히 보여주기 (Top 10 / Bottom 10) - 전국 기준
+# 6. 표 나란히 보여주기 (선택된 지역 기준)
 # -----------------------------------------------------------------------------
 st.markdown("---")
-st.subheader(f"📊 {selected_year}년 전국 고령화율 랭킹")
+st.subheader(f"📊 {selected_year}년 {selected_sido} 고령화율 현황")
 
-# 데이터 없음(NaN) 제외
-df_rank = df_all[df_all['연도'] == selected_year].dropna(subset=['고령화율(%)'])
+# 데이터 없음(NaN) 제외 후 표 렌더링
+df_rank = df_map.dropna(subset=['고령화율(%)'])
 table_cols = ['시도', '시군구', '고령화율(%)', '총인구', '고령인구']
 
 top10_df = df_rank.nlargest(10, '고령화율(%)')[table_cols].reset_index(drop=True)
@@ -188,58 +178,30 @@ with col_t2:
     st.dataframe(bottom10_df, use_container_width=True)
 
 # -----------------------------------------------------------------------------
-# 7. 광주·전남 기준 3대 지표(고령화, 청소년, 출산) 추이 비교
+# 7. 광주·전남 청소년 인구 증가(추이) 단독 분석
 # -----------------------------------------------------------------------------
 st.markdown("---")
-st.subheader("📈 광주·전남 지역 3대 지표 추이 분석")
-st.markdown(f"**{selected_year}년 기준**, 광주광역시와 전라남도 내에서 각 지표별로 가장 **높은 지역**과 **낮은 지역**의 연도별 변화 추이입니다.")
+st.subheader("📈 광주·전남 청소년 인구 변화 추이")
+st.markdown("광주광역시와 전라남도의 연도별 청소년(9~24세) 총 인구수 변화입니다.")
 
-# 광주·전남 데이터만 필터링
-df_gj_jn = df_all[df_all['시도'].isin(['광주광역시', '전라남도'])].copy()
-df_gj_jn_current = df_gj_jn[df_gj_jn['연도'] == selected_year]
+# 광주, 전남 데이터만 필터링하여 연도별로 청소년 인구를 모두 더함
+df_youth = df_all[df_all['시도'].isin(['광주광역시', '전라남도'])]
+youth_trend = df_youth.groupby(['연도', '시도'])['청소년인구'].sum().reset_index()
 
-# 추이 차트를 그리는 도우미 함수
-def plot_trend(metric_col, title, unit="비율(%)"):
-    # 현재 연도 기준으로 최고/최저 시군구를 찾음
-    max_idx = df_gj_jn_current[metric_col].idxmax()
-    min_idx = df_gj_jn_current[metric_col].idxmin()
-    
-    max_row = df_gj_jn_current.loc[max_idx]
-    min_row = df_gj_jn_current.loc[min_idx]
-    
-    # 해당 시군구의 전체 연도 데이터를 뽑아옴
-    max_trend = df_gj_jn[df_gj_jn['시군구코드'] == max_row['시군구코드']].copy()
-    max_trend['분류'] = f"최고: {max_row['시군구']}"
-    
-    min_trend = df_gj_jn[df_gj_jn['시군구코드'] == min_row['시군구코드']].copy()
-    min_trend['분류'] = f"최저: {min_row['시군구']}"
-    
-    # 두 지역의 데이터를 하나로 합침
-    trend_df = pd.concat([max_trend, min_trend])
-    
-    # 선 그래프 그리기
-    fig_line = px.line(
-        trend_df, x='연도', y=metric_col, color='분류', 
-        markers=True, title=title,
-        labels={metric_col: unit}
-    )
-    # 연도를 가로축에서 숫자가 아닌 항목(Category)으로 취급해 깔끔하게 보이도록 설정
-    fig_line.update_xaxes(type='category')
-    fig_line.update_layout(legend=dict(orientation="h", yanchor="bottom", y=1.02, xanchor="right", x=1))
-    
-    return fig_line
+# 선 그래프 그리기
+fig_youth = px.line(
+    youth_trend, 
+    x='연도', 
+    y='청소년인구', 
+    color='시도', 
+    markers=True,
+    labels={'청소년인구': '청소년 인구 (명)', '연도': '연도'}
+)
 
-# 3개의 지표를 3단으로 나란히 배치
-col_c1, col_c2, col_c3 = st.columns(3)
+# x축(연도)을 숫자형이 아닌 카테고리(항목)형으로 지정해 모든 연도가 깔끔하게 찍히도록 함
+fig_youth.update_xaxes(type='category')
+fig_youth.update_layout(
+    legend=dict(orientation="h", yanchor="bottom", y=1.02, xanchor="right", x=1)
+)
 
-with col_c1:
-    fig1 = plot_trend('고령화율(%)', '1️⃣ 고령화율 추이 (65세 이상)')
-    st.plotly_chart(fig1, use_container_width=True)
-
-with col_c2:
-    fig2 = plot_trend('청소년률(%)', '2️⃣ 청소년률 추이 (9~24세)')
-    st.plotly_chart(fig2, use_container_width=True)
-
-with col_c3:
-    fig3 = plot_trend('신생아비율(%)', '3️⃣ 신생아(0세) 비율 추이 (출산율 지표)')
-    st.plotly_chart(fig3, use_container_width=True)
+st.plotly_chart(fig_youth, use_container_width=True)
